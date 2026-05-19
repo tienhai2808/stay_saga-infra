@@ -10,6 +10,9 @@ services:
       - --providers.docker.exposedbydefault=false
       - --entrypoints.web.address=:80
       - --entrypoints.websecure.address=:443
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --entrypoints.web.http.redirections.entrypoint.permanent=true
       - --accesslog=true
       - --accesslog.format=json
       - --accesslog.filepath=/logs/access.log
@@ -214,7 +217,7 @@ services:
       start_period: 40s
     labels:
       - traefik.enable=true
-      - traefik.docker.network=proxy
+      - traefik.docker.network=stay-saga_proxy
 
       - traefik.http.routers.keycloak.entrypoints=websecure
       - traefik.http.routers.keycloak.rule=Host(`${PUBLIC_DOMAIN}`) && PathPrefix(`${KEYCLOAK_PATH_PREFIX}`)
@@ -394,7 +397,7 @@ services:
       start_period: 60s
     labels:
       - traefik.enable=true
-      - traefik.docker.network=proxy
+      - traefik.docker.network=stay-saga_proxy
 
       - traefik.http.routers.gateway.entrypoints=websecure
       - traefik.http.routers.gateway.rule=Host(`${PUBLIC_DOMAIN}`) && PathPrefix(`${SV_API_PREFIX}`)
@@ -452,7 +455,7 @@ services:
         condition: service_healthy
     labels:
       - traefik.enable=true
-      - traefik.docker.network=proxy
+      - traefik.docker.network=stay-saga_proxy
 
       - traefik.http.routers.client.entrypoints=websecure
       - traefik.http.routers.client.rule=Host(`${PUBLIC_DOMAIN}`)

@@ -6,7 +6,7 @@
    - `cp .env.example .env`
 2. Edit `.env` (domain, db password, keycloak secrets, payos keys, github token).
 3. Start infra + Keycloak first:
-   - `docker compose up -d postgres keycloak`
+   - `docker compose up -d traefik postgres keycloak`
 4. Open Keycloak at:
    - `https://${PUBLIC_DOMAIN}${KEYCLOAK_PATH_PREFIX}`
 5. Manually configure Keycloak realm/clients (details below).
