@@ -74,110 +74,6 @@ services:
           psql -h postgres -U "$$POSTGRES_USER" -d "$$POSTGRES_DEFAULT_DB" -c "CREATE DATABASE \"$$db\""
         done
 
-  db-migrate-user:
-    image: mcr.microsoft.com/dotnet/sdk:10.0
-    container_name: db-migrate-user
-    restart: "no"
-    env_file:
-      - .env
-    working_dir: /src/user_service
-    environment:
-      ConnectionStrings__Default: Host=postgres;Port=5432;Database=${USER_DB_NAME};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
-    depends_on:
-      db-init:
-        condition: service_completed_successfully
-    networks:
-      - backend
-    volumes:
-      - ../../services/user_service:/src/user_service
-    command:
-      - /bin/sh
-      - -ec
-      - |
-        export PATH="$$PATH:/root/.dotnet/tools"
-        dotnet tool install --global dotnet-ef --version 10.0.8
-        dotnet ef database update --project UserService.csproj --startup-project UserService.csproj
-
-  db-migrate-property:
-    image: mcr.microsoft.com/dotnet/sdk:10.0
-    container_name: db-migrate-property
-    restart: "no"
-    env_file:
-      - .env
-    working_dir: /src/property_service
-    environment:
-      ConnectionStrings__Default: Host=postgres;Port=5432;Database=${PROPERTY_DB_NAME};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
-    depends_on:
-      db-init:
-        condition: service_completed_successfully
-    networks:
-      - backend
-    volumes:
-      - ../../services/property_service:/src/property_service
-    command:
-      - /bin/sh
-      - -ec
-      - |
-        export PATH="$$PATH:/root/.dotnet/tools"
-        dotnet tool install --global dotnet-ef --version 10.0.8
-        dotnet ef database update --project PropertyService.csproj --startup-project PropertyService.csproj
-
-  db-migrate-order:
-    image: mcr.microsoft.com/dotnet/sdk:10.0
-    container_name: db-migrate-order
-    restart: "no"
-    env_file:
-      - .env
-    working_dir: /src/order_service
-    environment:
-      ConnectionStrings__Default: Host=postgres;Port=5432;Database=${ORDER_DB_NAME};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
-      GrpcClients__PropertyService__Address: http://property:7026
-    depends_on:
-      db-init:
-        condition: service_completed_successfully
-    networks:
-      - backend
-    volumes:
-      - ../../services/order_service:/src/order_service
-    command:
-      - /bin/sh
-      - -ec
-      - |
-        export PATH="$$PATH:/root/.dotnet/tools"
-        dotnet tool install --global dotnet-ef --version 10.0.8
-        dotnet ef database update --project OrderService.csproj --startup-project OrderService.csproj
-
-  db-migrate-payment:
-    image: mcr.microsoft.com/dotnet/sdk:10.0
-    container_name: db-migrate-payment
-    restart: "no"
-    env_file:
-      - .env
-    working_dir: /src/payment_service
-    environment:
-      ConnectionStrings__Default: Host=postgres;Port=5432;Database=${PAYMENT_DB_NAME};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
-      PayOS__ClientId: ${PAYOS_CLIENT_ID}
-      PayOS__ApiKey: ${PAYOS_API_KEY}
-      PayOS__ChecksumKey: ${PAYOS_CHECKSUM_KEY}
-      PayOS__ReturnUrl: https://${PUBLIC_DOMAIN}/customer/payment-result?status=success
-      PayOS__CancelUrl: https://${PUBLIC_DOMAIN}/customer/payment-result?status=cancel
-    depends_on:
-      db-init:
-        condition: service_completed_successfully
-      db-migrate-order:
-        condition: service_completed_successfully
-    networks:
-      - backend
-    volumes:
-      - ../../services/payment_service:/src/payment_service
-    command:
-      - /bin/sh
-      - -ec
-      - |
-        export PATH="$$PATH:/root/.dotnet/tools"
-        dotnet tool install --global dotnet-ef --version 10.0.8
-        dotnet ef database update --project PaymentService.csproj --startup-project PaymentService.csproj
-
   keycloak:
     image: quay.io/keycloak/keycloak:26.6.1
     container_name: keycloak
@@ -273,7 +169,7 @@ services:
     networks:
       - backend
     depends_on:
-      db-migrate-user:
+      db-init:
         condition: service_completed_successfully
       keycloak:
         condition: service_healthy
@@ -293,7 +189,7 @@ services:
     networks:
       - backend
     depends_on:
-      db-migrate-property:
+      db-init:
         condition: service_completed_successfully
       keycloak:
         condition: service_healthy
@@ -314,7 +210,7 @@ services:
     networks:
       - backend
     depends_on:
-      db-migrate-order:
+      db-init:
         condition: service_completed_successfully
       kafka:
         condition: service_healthy
@@ -343,7 +239,7 @@ services:
     networks:
       - backend
     depends_on:
-      db-migrate-payment:
+      db-init:
         condition: service_completed_successfully
       kafka:
         condition: service_healthy
