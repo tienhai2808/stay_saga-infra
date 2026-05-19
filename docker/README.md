@@ -1,5 +1,7 @@
 # Stay Saga Docker (Production)
 
+Single-file deployment only: all routing is defined directly in `docker-compose.yml` (no extra Traefik dynamic config files).
+
 ## Flow deploy
 
 1. Copy env template:
@@ -7,6 +9,8 @@
 2. Edit `.env` (domain, db password, keycloak secrets, payos keys, github token).
 3. Start infra + Keycloak first:
    - `docker compose up -d traefik postgres keycloak`
+   - if you changed compose labels/config, force recreate:
+   - `docker compose up -d --force-recreate traefik keycloak`
 4. Open Keycloak at:
    - `https://${PUBLIC_DOMAIN}${KEYCLOAK_PATH_PREFIX}`
 5. Manually configure Keycloak realm/clients (details below).
@@ -68,6 +72,8 @@ Important:
   - `docker compose up --force-recreate db-migrate-user db-migrate-property db-migrate-order db-migrate-payment`
 - Re-run only db init:
   - `docker compose up --force-recreate db-init`
+- Quick check Keycloak route through Traefik:
+  - `curl -kI --resolve ${PUBLIC_DOMAIN}:443:127.0.0.1 https://${PUBLIC_DOMAIN}${KEYCLOAK_PATH_PREFIX}/admin/master/console/`
 
 ## Notes
 

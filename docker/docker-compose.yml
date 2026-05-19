@@ -8,6 +8,7 @@ services:
     command:
       - --providers.docker=true
       - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=stay-saga_proxy
       - --entrypoints.web.address=:80
       - --entrypoints.websecure.address=:443
       - --entrypoints.web.http.redirections.entrypoint.to=websecure
@@ -218,29 +219,27 @@ services:
     labels:
       - traefik.enable=true
       - traefik.docker.network=stay-saga_proxy
-
-      - traefik.http.routers.keycloak.entrypoints=websecure
-      - traefik.http.routers.keycloak.rule=Host(`${PUBLIC_DOMAIN}`) && PathPrefix(`${KEYCLOAK_PATH_PREFIX}`)
-      - traefik.http.routers.keycloak.priority=90
-      - traefik.http.routers.keycloak.tls=true
-      - traefik.http.routers.keycloak.tls.certresolver=le
-      - traefik.http.routers.keycloak.middlewares=security-headers
-
-      - traefik.http.routers.keycloak-http.entrypoints=web
-      - traefik.http.routers.keycloak-http.rule=Host(`${PUBLIC_DOMAIN}`) && PathPrefix(`${KEYCLOAK_PATH_PREFIX}`)
-      - traefik.http.routers.keycloak-http.priority=90
-      - traefik.http.routers.keycloak-http.middlewares=redirect-to-https
-
-      - traefik.http.services.keycloak.loadbalancer.server.port=1307
-
-      - traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https
-      - traefik.http.middlewares.redirect-to-https.redirectscheme.permanent=true
-      - traefik.http.middlewares.security-headers.headers.stsSeconds=31536000
-      - traefik.http.middlewares.security-headers.headers.stsIncludeSubdomains=true
-      - traefik.http.middlewares.security-headers.headers.forceSTSHeader=true
-      - traefik.http.middlewares.security-headers.headers.contentTypeNosniff=true
-      - traefik.http.middlewares.security-headers.headers.frameDeny=true
-      - traefik.http.middlewares.security-headers.headers.referrerPolicy=strict-origin-when-cross-origin
+      - traefik.http.routers.ss-keycloak.entrypoints=websecure
+      - traefik.http.routers.ss-keycloak.rule=Host(`${PUBLIC_DOMAIN}`) && PathPrefix(`${KEYCLOAK_PATH_PREFIX}`)
+      - traefik.http.routers.ss-keycloak.priority=200
+      - traefik.http.routers.ss-keycloak.tls=true
+      - traefik.http.routers.ss-keycloak.tls.certresolver=le
+      - traefik.http.routers.ss-keycloak.middlewares=ss-keycloak-security
+      - traefik.http.routers.ss-keycloak.service=ss-keycloak-svc
+      - traefik.http.routers.ss-keycloak-http.entrypoints=web
+      - traefik.http.routers.ss-keycloak-http.rule=Host(`${PUBLIC_DOMAIN}`) && PathPrefix(`${KEYCLOAK_PATH_PREFIX}`)
+      - traefik.http.routers.ss-keycloak-http.priority=200
+      - traefik.http.routers.ss-keycloak-http.middlewares=ss-keycloak-redirect-to-https
+      - traefik.http.routers.ss-keycloak-http.service=ss-keycloak-svc
+      - traefik.http.services.ss-keycloak-svc.loadbalancer.server.port=1307
+      - traefik.http.middlewares.ss-keycloak-redirect-to-https.redirectscheme.scheme=https
+      - traefik.http.middlewares.ss-keycloak-redirect-to-https.redirectscheme.permanent=true
+      - traefik.http.middlewares.ss-keycloak-security.headers.stsSeconds=31536000
+      - traefik.http.middlewares.ss-keycloak-security.headers.stsIncludeSubdomains=true
+      - traefik.http.middlewares.ss-keycloak-security.headers.forceSTSHeader=true
+      - traefik.http.middlewares.ss-keycloak-security.headers.contentTypeNosniff=true
+      - traefik.http.middlewares.ss-keycloak-security.headers.frameDeny=true
+      - traefik.http.middlewares.ss-keycloak-security.headers.referrerPolicy=strict-origin-when-cross-origin
 
   kafka:
     image: apache/kafka:4.1.1
