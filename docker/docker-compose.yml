@@ -2,25 +2,24 @@ name: stay-saga
 
 services:
   traefik:
-    image: traefik:v3.6.17
+    image: traefik:v2.11
     container_name: traefik
     restart: unless-stopped
     command:
-      - --providers.docker=true
-      - --providers.docker.exposedbydefault=false
-      - --providers.docker.network=stay-saga_proxy
-      - --entrypoints.web.address=:80
-      - --entrypoints.websecure.address=:443
-      - --entrypoints.web.http.redirections.entrypoint.to=websecure
-      - --entrypoints.web.http.redirections.entrypoint.scheme=https
-      - --entrypoints.web.http.redirections.entrypoint.permanent=true
-      - --accesslog=true
-      - --accesslog.format=json
-      - --accesslog.filepath=/logs/access.log
-      - --certificatesresolvers.le.acme.email=${ACME_EMAIL}
-      - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
-      - --certificatesresolvers.le.acme.httpchallenge=true
-      - --certificatesresolvers.le.acme.httpchallenge.entrypoint=web
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--accesslog=true"
+      - "--accesslog.format=json"
+      - "--accesslog.filepath=/logs/access.log"
+      - "--certificatesresolvers.le.acme.tlschallenge=true"
+      - "--certificatesresolvers.le.acme.email=${ACME_EMAIL}"
+      - "--certificatesresolvers.le.acme.storage=/letsencrypt/acme.json"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
+      - "traefik.http.middlewares.redirect-to-https.redirectscheme.permanent=true"
     ports:
       - "80:80"
       - "443:443"
@@ -29,8 +28,8 @@ services:
       - letsencrypt:/letsencrypt
       - ./traefik/logs:/logs
     networks:
-      - proxy
-      - internal
+      - frontend
+      - backend
 
   postgres:
     image: postgres:17.9-alpine
@@ -45,7 +44,7 @@ services:
     expose:
       - "5432"
     networks:
-      - internal
+      - backend
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 10s
@@ -63,7 +62,7 @@ services:
       postgres:
         condition: service_healthy
     networks:
-      - internal
+      - backend
     command:
       - /bin/sh
       - -ec
@@ -88,7 +87,7 @@ services:
       db-init:
         condition: service_completed_successfully
     networks:
-      - internal
+      - backend
     volumes:
       - ../../services/user_service:/src/user_service
     command:
@@ -112,7 +111,7 @@ services:
       db-init:
         condition: service_completed_successfully
     networks:
-      - internal
+      - backend
     volumes:
       - ../../services/property_service:/src/property_service
     command:
@@ -137,7 +136,7 @@ services:
       db-init:
         condition: service_completed_successfully
     networks:
-      - internal
+      - backend
     volumes:
       - ../../services/order_service:/src/order_service
     command:
@@ -168,7 +167,7 @@ services:
       db-migrate-order:
         condition: service_completed_successfully
     networks:
-      - internal
+      - backend
     volumes:
       - ../../services/payment_service:/src/payment_service
     command:
@@ -190,8 +189,7 @@ services:
       - --health-enabled=true
       - --metrics-enabled=true
       - --proxy-headers=xforwarded
-      - --http-relative-path=${KEYCLOAK_PATH_PREFIX}
-      - --hostname=https://${PUBLIC_DOMAIN}${KEYCLOAK_PATH_PREFIX}
+      - --hostname=https://${KEYCLOAK_DOMAIN}
       - --hostname-strict=true
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KC_BOOTSTRAP_ADMIN_USERNAME}
@@ -205,41 +203,33 @@ services:
     expose:
       - "1307"
     networks:
-      - proxy
-      - internal
+      - frontend
+      - backend
     depends_on:
       db-init:
         condition: service_completed_successfully
     healthcheck:
-      test: ["CMD-SHELL", "wget --spider -q http://127.0.0.1:1307${KEYCLOAK_PATH_PREFIX}/health/ready || exit 1"]
+      test: ["CMD-SHELL", "wget --spider -q http://127.0.0.1:1307/health/ready || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 30
       start_period: 40s
     labels:
-      - traefik.enable=true
-      - traefik.docker.network=stay-saga_proxy
-      - traefik.http.routers.ss-keycloak.entrypoints=websecure
-      - traefik.http.routers.ss-keycloak.rule=Host(`${PUBLIC_DOMAIN}`) && PathPrefix(`${KEYCLOAK_PATH_PREFIX}`)
-      - traefik.http.routers.ss-keycloak.priority=200
-      - traefik.http.routers.ss-keycloak.tls=true
-      - traefik.http.routers.ss-keycloak.tls.certresolver=le
-      - traefik.http.routers.ss-keycloak.middlewares=ss-keycloak-security
-      - traefik.http.routers.ss-keycloak.service=ss-keycloak-svc
-      - traefik.http.routers.ss-keycloak-http.entrypoints=web
-      - traefik.http.routers.ss-keycloak-http.rule=Host(`${PUBLIC_DOMAIN}`) && PathPrefix(`${KEYCLOAK_PATH_PREFIX}`)
-      - traefik.http.routers.ss-keycloak-http.priority=200
-      - traefik.http.routers.ss-keycloak-http.middlewares=ss-keycloak-redirect-to-https
-      - traefik.http.routers.ss-keycloak-http.service=ss-keycloak-svc
-      - traefik.http.services.ss-keycloak-svc.loadbalancer.server.port=1307
-      - traefik.http.middlewares.ss-keycloak-redirect-to-https.redirectscheme.scheme=https
-      - traefik.http.middlewares.ss-keycloak-redirect-to-https.redirectscheme.permanent=true
-      - traefik.http.middlewares.ss-keycloak-security.headers.stsSeconds=31536000
-      - traefik.http.middlewares.ss-keycloak-security.headers.stsIncludeSubdomains=true
-      - traefik.http.middlewares.ss-keycloak-security.headers.forceSTSHeader=true
-      - traefik.http.middlewares.ss-keycloak-security.headers.contentTypeNosniff=true
-      - traefik.http.middlewares.ss-keycloak-security.headers.frameDeny=true
-      - traefik.http.middlewares.ss-keycloak-security.headers.referrerPolicy=strict-origin-when-cross-origin
+      traefik.enable: "true"
+      traefik.docker.network: "frontend"
+
+      traefik.http.routers.keycloak.entrypoints: websecure
+      traefik.http.routers.keycloak.rule: Host(`${KEYCLOAK_DOMAIN}`)
+      traefik.http.routers.keycloak.tls: "true"
+      traefik.http.routers.keycloak.tls.certresolver: le
+      traefik.http.routers.keycloak.priority: "10"
+
+      traefik.http.routers.keycloak-http.entrypoints: web
+      traefik.http.routers.keycloak-http.rule: Host(`${KEYCLOAK_DOMAIN}`)
+      traefik.http.routers.keycloak-http.middlewares: redirect-to-https
+      traefik.http.routers.keycloak-http.priority: "10"
+
+      traefik.http.services.keycloak.loadbalancer.server.port: "1307"
 
   kafka:
     image: apache/kafka:4.1.1
@@ -248,7 +238,7 @@ services:
     expose:
       - "9092"
     networks:
-      - internal
+      - backend
     volumes:
       - kafka_data:/var/lib/kafka
     healthcheck:
@@ -271,17 +261,17 @@ services:
       ASPNETCORE_FORWARDEDHEADERS_ENABLED: "true"
       ConnectionStrings__Default: Host=postgres;Port=5432;Database=${USER_DB_NAME};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
       Keycloak__Realm: ${KEYCLOAK_REALM}
-      Keycloak__AdminUrl: http://keycloak:1307${KEYCLOAK_PATH_PREFIX}
+      Keycloak__AdminUrl: http://keycloak:1307
       Keycloak__AdminClientId: ${KEYCLOAK_ADMIN_CLIENT_ID}
       Keycloak__AdminClientSecret: ${KEYCLOAK_ADMIN_CLIENT_SECRET}
       Keycloak__ClientId: ${KEYCLOAK_API_CLIENT_ID}
       Keycloak__ClientSecret: ${KEYCLOAK_API_CLIENT_SECRET}
-      Keycloak__Authority: https://${PUBLIC_DOMAIN}${KEYCLOAK_PATH_PREFIX}/realms/${KEYCLOAK_REALM}
+      Keycloak__Authority: https://${KEYCLOAK_DOMAIN}/realms/${KEYCLOAK_REALM}
       Keycloak__Audience: ${KEYCLOAK_API_AUDIENCE}
     expose:
       - "5293"
     networks:
-      - internal
+      - backend
     depends_on:
       db-migrate-user:
         condition: service_completed_successfully
@@ -295,13 +285,13 @@ services:
     restart: unless-stopped
     environment:
       ConnectionStrings__Default: Host=postgres;Port=5432;Database=${PROPERTY_DB_NAME};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
-      Keycloak__Authority: https://${PUBLIC_DOMAIN}${KEYCLOAK_PATH_PREFIX}/realms/${KEYCLOAK_REALM}
+      Keycloak__Authority: https://${KEYCLOAK_DOMAIN}/realms/${KEYCLOAK_REALM}
       Keycloak__Audience: ${KEYCLOAK_API_AUDIENCE}
     expose:
       - "5203"
       - "7026"
     networks:
-      - internal
+      - backend
     depends_on:
       db-migrate-property:
         condition: service_completed_successfully
@@ -317,12 +307,12 @@ services:
       ConnectionStrings__Default: Host=postgres;Port=5432;Database=${ORDER_DB_NAME};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
       GrpcClients__PropertyService__Address: http://property:7026
       Kafka__BootstrapServers: kafka:9092
-      Keycloak__Authority: https://${PUBLIC_DOMAIN}${KEYCLOAK_PATH_PREFIX}/realms/${KEYCLOAK_REALM}
+      Keycloak__Authority: https://${KEYCLOAK_DOMAIN}/realms/${KEYCLOAK_REALM}
       Keycloak__Audience: ${KEYCLOAK_API_AUDIENCE}
     expose:
       - "5215"
     networks:
-      - internal
+      - backend
     depends_on:
       db-migrate-order:
         condition: service_completed_successfully
@@ -341,7 +331,7 @@ services:
     environment:
       ConnectionStrings__Default: Host=postgres;Port=5432;Database=${PAYMENT_DB_NAME};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
       Kafka__BootstrapServers: kafka:9092
-      Keycloak__Authority: https://${PUBLIC_DOMAIN}${KEYCLOAK_PATH_PREFIX}/realms/${KEYCLOAK_REALM}
+      Keycloak__Authority: https://${KEYCLOAK_DOMAIN}/realms/${KEYCLOAK_REALM}
       Keycloak__Audience: ${KEYCLOAK_API_AUDIENCE}
       PayOS__ClientId: ${PAYOS_CLIENT_ID}
       PayOS__ApiKey: ${PAYOS_API_KEY}
@@ -351,7 +341,7 @@ services:
     expose:
       - "5247"
     networks:
-      - internal
+      - backend
     depends_on:
       db-migrate-payment:
         condition: service_completed_successfully
@@ -368,7 +358,7 @@ services:
     environment:
       ASPNETCORE_FORWARDEDHEADERS_ENABLED: "true"
       Cors__AllowedOrigins__0: https://${PUBLIC_DOMAIN}
-      Keycloak__Authority: https://${PUBLIC_DOMAIN}${KEYCLOAK_PATH_PREFIX}/realms/${KEYCLOAK_REALM}
+      Keycloak__Authority: https://${KEYCLOAK_DOMAIN}/realms/${KEYCLOAK_REALM}
       Keycloak__Audience: ${KEYCLOAK_API_AUDIENCE}
       ReverseProxy__Clusters__user-service__Destinations__destination1__Address: http://user:5293
       ReverseProxy__Clusters__property-service__Destinations__destination1__Address: http://property:5203
@@ -377,8 +367,8 @@ services:
     expose:
       - "5122"
     networks:
-      - internal
-      - proxy
+      - frontend
+      - backend
     depends_on:
       user:
         condition: service_started
@@ -395,47 +385,44 @@ services:
       retries: 10
       start_period: 60s
     labels:
-      - traefik.enable=true
-      - traefik.docker.network=stay-saga_proxy
+      traefik.enable: "true"
+      traefik.docker.network: "frontend"
 
-      - traefik.http.routers.gateway.entrypoints=websecure
-      - traefik.http.routers.gateway.rule=Host(`${PUBLIC_DOMAIN}`) && PathPrefix(`${SV_API_PREFIX}`)
-      - traefik.http.routers.gateway.priority=100
-      - traefik.http.routers.gateway.tls=true
-      - traefik.http.routers.gateway.tls.certresolver=le
-      - traefik.http.routers.gateway.middlewares=gateway-ratelimit,gateway-strip,gateway-security,gateway-compress,gateway-sizelimit
+      traefik.http.routers.gateway.entrypoints: websecure
+      traefik.http.routers.gateway.rule: Host(`${PUBLIC_DOMAIN}`) && PathPrefix(`${SV_API_PREFIX}`)
+      traefik.http.routers.gateway.priority: "100"
+      traefik.http.routers.gateway.tls: "true"
+      traefik.http.routers.gateway.tls.certresolver: le
+      traefik.http.routers.gateway.middlewares: gateway-ratelimit,gateway-strip,gateway-security,gateway-compress,gateway-sizelimit
 
-      - traefik.http.routers.gateway-http.entrypoints=web
-      - traefik.http.routers.gateway-http.rule=Host(`${PUBLIC_DOMAIN}`) && PathPrefix(`${SV_API_PREFIX}`)
-      - traefik.http.routers.gateway-http.priority=100
-      - traefik.http.routers.gateway-http.middlewares=redirect-to-https
+      traefik.http.routers.gateway-http.entrypoints: web
+      traefik.http.routers.gateway-http.rule: Host(`${PUBLIC_DOMAIN}`) && PathPrefix(`${SV_API_PREFIX}`)
+      traefik.http.routers.gateway-http.priority: "100"
+      traefik.http.routers.gateway-http.middlewares: redirect-to-https
 
-      - traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https
-      - traefik.http.middlewares.redirect-to-https.redirectscheme.permanent=true
+      traefik.http.middlewares.gateway-strip.stripprefix.prefixes: ${SV_API_PREFIX}
 
-      - traefik.http.middlewares.gateway-strip.stripprefix.prefixes=${SV_API_PREFIX}
+      traefik.http.middlewares.gateway-ratelimit.ratelimit.average: "100"
+      traefik.http.middlewares.gateway-ratelimit.ratelimit.burst: "50"
+      traefik.http.middlewares.gateway-ratelimit.ratelimit.period: "1m"
+      traefik.http.middlewares.gateway-ratelimit.ratelimit.sourcecriterion.ipstrategy.depth: "1"
 
-      - traefik.http.middlewares.gateway-ratelimit.ratelimit.average=100
-      - traefik.http.middlewares.gateway-ratelimit.ratelimit.burst=50
-      - traefik.http.middlewares.gateway-ratelimit.ratelimit.period=1m
-      - traefik.http.middlewares.gateway-ratelimit.ratelimit.sourcecriterion.ipstrategy.depth=1
+      traefik.http.middlewares.gateway-security.headers.stsSeconds: "31536000"
+      traefik.http.middlewares.gateway-security.headers.stsIncludeSubdomains: "true"
+      traefik.http.middlewares.gateway-security.headers.forceSTSHeader: "true"
+      traefik.http.middlewares.gateway-security.headers.contentTypeNosniff: "true"
+      traefik.http.middlewares.gateway-security.headers.frameDeny: "true"
+      traefik.http.middlewares.gateway-security.headers.referrerPolicy: "strict-origin-when-cross-origin"
 
-      - traefik.http.middlewares.gateway-security.headers.stsSeconds=31536000
-      - traefik.http.middlewares.gateway-security.headers.stsIncludeSubdomains=true
-      - traefik.http.middlewares.gateway-security.headers.forceSTSHeader=true
-      - traefik.http.middlewares.gateway-security.headers.contentTypeNosniff=true
-      - traefik.http.middlewares.gateway-security.headers.frameDeny=true
-      - traefik.http.middlewares.gateway-security.headers.referrerPolicy=strict-origin-when-cross-origin
+      traefik.http.middlewares.gateway-compress.compress: "true"
 
-      - traefik.http.middlewares.gateway-compress.compress=true
+      traefik.http.middlewares.gateway-sizelimit.buffering.maxRequestBodyBytes: "10485760"
+      traefik.http.middlewares.gateway-sizelimit.buffering.memRequestBodyBytes: "2097152"
 
-      - traefik.http.middlewares.gateway-sizelimit.buffering.maxRequestBodyBytes=10485760
-      - traefik.http.middlewares.gateway-sizelimit.buffering.memRequestBodyBytes=2097152
-
-      - traefik.http.services.gateway.loadbalancer.server.port=5122
-      - traefik.http.services.gateway.loadbalancer.healthcheck.path=/ping
-      - traefik.http.services.gateway.loadbalancer.healthcheck.interval=10s
-      - traefik.http.services.gateway.loadbalancer.healthcheck.timeout=3s
+      traefik.http.services.gateway.loadbalancer.server.port: "5122"
+      traefik.http.services.gateway.loadbalancer.healthcheck.path: "/ping"
+      traefik.http.services.gateway.loadbalancer.healthcheck.interval: "10s"
+      traefik.http.services.gateway.loadbalancer.healthcheck.timeout: "3s"
 
   client:
     image: docker.io/tienhai2808/stay_saga-client
@@ -447,35 +434,34 @@ services:
     expose:
       - "3000"
     networks:
-      - proxy
-      - internal
+      - frontend
+      - backend
     depends_on:
       gateway:
         condition: service_healthy
     labels:
-      - traefik.enable=true
-      - traefik.docker.network=stay-saga_proxy
+      traefik.enable: "true"
+      traefik.docker.network: "frontend"
 
-      - traefik.http.routers.client.entrypoints=websecure
-      - traefik.http.routers.client.rule=Host(`${PUBLIC_DOMAIN}`)
-      - traefik.http.routers.client.priority=1
-      - traefik.http.routers.client.tls=true
-      - traefik.http.routers.client.tls.certresolver=le
+      traefik.http.routers.client.entrypoints: websecure
+      traefik.http.routers.client.rule: Host(`${PUBLIC_DOMAIN}`)
+      traefik.http.routers.client.priority: "1"
+      traefik.http.routers.client.tls: "true"
+      traefik.http.routers.client.tls.certresolver: le
 
-      - traefik.http.routers.client-http.entrypoints=web
-      - traefik.http.routers.client-http.rule=Host(`${PUBLIC_DOMAIN}`)
-      - traefik.http.routers.client-http.priority=1
-      - traefik.http.routers.client-http.middlewares=redirect-to-https
+      traefik.http.routers.client-http.entrypoints: web
+      traefik.http.routers.client-http.rule: Host(`${PUBLIC_DOMAIN}`)
+      traefik.http.routers.client-http.priority: "1"
+      traefik.http.routers.client-http.middlewares: redirect-to-https
 
-      - traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https
-      - traefik.http.middlewares.redirect-to-https.redirectscheme.permanent=true
-
-      - traefik.http.services.client.loadbalancer.server.port=3000
+      traefik.http.services.client.loadbalancer.server.port: "3000"
 
 networks:
-  proxy:
+  frontend:
+    name: frontend
     driver: bridge
-  internal:
+  backend:
+    name: backend
     driver: bridge
 
 volumes:
