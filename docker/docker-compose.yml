@@ -1,0 +1,256 @@
+services:
+  traefik:
+    image: traefik:v3.6.17
+    container_name: traefik
+    restart: unless-stopped
+    command:
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--accesslog=true"
+      - "--accesslog.format=json"
+      - "--accesslog.filepath=/logs/access.log"
+      - "--certificatesresolvers.le.acme.tlschallenge=true"
+      - "--certificatesresolvers.le.acme.email=${ACME_EMAIL}"
+      - "--certificatesresolvers.le.acme.storage=/letsencrypt/acme.json"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
+      - "traefik.http.middlewares.redirect-to-https.redirectscheme.permanent=true"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - letsencrypt:/letsencrypt
+      - ./traefik/logs:/logs
+    networks:
+      - frontend
+      - backend
+
+  postgres:
+    image: postgres:17.9-alpine
+    container_name: postgres
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - backend
+    expose:
+      - "5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.6.1
+    container_name: keycloak
+    restart: unless-stopped
+    command: ["start", --import-realm"]
+    expose:
+      - "1307:8080"
+    env_file:
+      - .env
+    networks:
+      - backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  kafka:
+    image: apache/kafka:4.1.1
+    container_name: kafka
+    restart: unless-stopped
+    ports:
+      - "9092:9092"
+    env_file:
+      - .env
+    networks:
+      - backend
+    volumes:
+      - kafka_data:/var/lib/kafka
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1 || exit 1",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+
+  user:
+    image: docker.io/tienhai2808/stay_saga-user
+    init: true
+    restart: unless-stopped
+    env_file:
+      - .env
+    networks:
+      - backend
+    expose:
+      - "5293"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  property:
+    image: docker.io/tienhai2808/stay_saga-property
+    init: true
+    restart: unless-stopped
+    env_file:
+      - .env
+    networks:
+      - backend
+    expose:
+      - "5203"
+      - "7026"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  order:
+    image: docker.io/tienhai2808/stay_saga-order
+    init: true
+    restart: unless-stopped
+    env_file:
+      - .env
+    networks:
+      - backend
+    expose:
+      - "5215"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+
+  payment:
+    image: docker.io/tienhai2808/stay_saga-payment
+    init: true
+    restart: unless-stopped
+    env_file:
+      - .env
+    networks:
+      - backend
+    expose:
+      - "5247"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+
+  gateway:
+    image: docker.io/tienhai2808/stay_saga-gateway
+    init: true
+    restart: unless-stopped
+    env_file:
+      - .env
+    networks:
+      - backend
+    expose:
+      - "5122"
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: "backend"
+      traefik.http.routers.server.entrypoints: websecure
+      traefik.http.routers.server.priority: "10"
+      traefik.http.routers.server.middlewares: server-ratelimit,server-headers,server-compress,server-sizelimit,server-strip
+      traefik.http.routers.server.rule: Host(`staysaga.tienhai.site`) && PathPrefix(`${SV_API_PREFIX}`)
+      traefik.http.routers.server.tls: "true"
+      traefik.http.routers.server.tls.certresolver: le
+      traefik.http.routers.server.tls.domains.main: "staysaga.tienhai.site"
+
+      traefik.http.routers.server-http.entrypoints: web
+      traefik.http.routers.server-http.rule: Host(`staysaga.tienhai.site`) && PathPrefix(`${SV_API_PREFIX}`)
+      traefik.http.routers.server-http.middlewares: redirect-to-https
+      traefik.http.routers.server-http.priority: "10"
+
+      traefik.http.middlewares.server-strip.stripprefix.prefixes: ${SV_API_PREFIX}
+
+      traefik.http.middlewares.redirect-to-https.redirectscheme.scheme: https
+      traefik.http.middlewares.redirect-to-https.redirectscheme.permanent: "true"
+
+      traefik.http.middlewares.server-ratelimit.ratelimit.average: "100"
+      traefik.http.middlewares.server-ratelimit.ratelimit.burst: "50"
+      traefik.http.middlewares.server-ratelimit.ratelimit.period: "1m"
+      traefik.http.middlewares.server-ratelimit.ratelimit.sourcecriterion.ipstrategy.depth: "1"
+
+      traefik.http.middlewares.server-headers.headers.stsSeconds: "31536000"
+      traefik.http.middlewares.server-headers.headers.stsIncludeSubdomains: "true"
+      traefik.http.middlewares.server-headers.headers.forceSTSHeader: "true"
+      traefik.http.middlewares.server-headers.headers.contentTypeNosniff: "true"
+      traefik.http.middlewares.server-headers.headers.frameDeny: "true"
+      traefik.http.middlewares.server-headers.headers.browserXssFilter: "true"
+      traefik.http.middlewares.server-headers.headers.referrerPolicy: "strict-origin-when-cross-origin"
+
+      traefik.http.middlewares.server-compress.compress: "true"
+
+      traefik.http.middlewares.server-sizelimit.buffering.maxRequestBodyBytes: "10485760"
+      traefik.http.middlewares.server-sizelimit.buffering.memRequestBodyBytes: "2097152"
+
+      traefik.http.services.server.loadbalancer.server.port: "5122"
+      traefik.http.services.server.loadbalancer.healthcheck.path: "/ping"
+      traefik.http.services.server.loadbalancer.healthcheck.interval: "10s"
+      traefik.http.services.server.loadbalancer.healthcheck.timeout: "3s"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:5122/ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 60s
+
+  client:
+    image: docker.io/tienhai2808/stay_saga-client
+    init: true
+    env_file:
+      - .env
+    expose:
+      - "3000"
+    restart: unless-stopped
+    networks:
+      - frontend
+      - backend
+    depends_on:
+      gateway:
+        condition: service_healthy
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: "frontend"
+
+      traefik.http.routers.client.entrypoints: websecure
+      traefik.http.routers.client.rule: Host(`staysaga.tienhai.site`)
+      traefik.http.routers.client.tls.certresolver: le
+      traefik.http.routers.client.priority: "1"
+      traefik.http.routers.client.tls.domains.main: "staysaga.tienhai.site"
+
+      traefik.http.routers.client-http.entrypoints: web
+      traefik.http.routers.client-http.rule: Host(`staysaga.tienhai.site`)
+      traefik.http.routers.client-http.middlewares: redirect-to-https
+      traefik.http.routers.client-http.priority: "1"
+
+      traefik.http.services.client.loadbalancer.server.port: "3000"
+      traefik.http.services.client.loadbalancer.healthcheck.path: "/"
+      traefik.http.services.client.loadbalancer.healthcheck.interval: "10s"
+      traefik.http.services.client.loadbalancer.healthcheck.timeout: "3s"
+
+networks:
+  frontend:
+    driver: bridge
+  backend:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    driver: local
+  kafka_data:
+    driver: local
+  letsencrypt:
+    driver: local
