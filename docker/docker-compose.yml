@@ -1,23 +1,22 @@
+name: stay-saga
+
 services:
   traefik:
     image: traefik:v3.6.17
     container_name: traefik
     restart: unless-stopped
     command:
-      - "--providers.docker=true"
-      - "--providers.docker.exposedbydefault=false"
-      - "--entrypoints.web.address=:80"
-      - "--entrypoints.websecure.address=:443"
-      - "--accesslog=true"
-      - "--accesslog.format=json"
-      - "--accesslog.filepath=/logs/access.log"
-      - "--certificatesresolvers.le.acme.tlschallenge=true"
-      - "--certificatesresolvers.le.acme.email=${ACME_EMAIL}"
-      - "--certificatesresolvers.le.acme.storage=/letsencrypt/acme.json"
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https"
-      - "traefik.http.middlewares.redirect-to-https.redirectscheme.permanent=true"
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --accesslog=true
+      - --accesslog.format=json
+      - --accesslog.filepath=/logs/access.log
+      - --certificatesresolvers.le.acme.email=${ACME_EMAIL}
+      - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
+      - --certificatesresolvers.le.acme.httpchallenge=true
+      - --certificatesresolvers.le.acme.httpchallenge.entrypoint=web
     ports:
       - "80:80"
       - "443:443"
@@ -26,231 +25,461 @@ services:
       - letsencrypt:/letsencrypt
       - ./traefik/logs:/logs
     networks:
-      - frontend
-      - backend
+      - proxy
+      - internal
 
   postgres:
     image: postgres:17.9-alpine
     container_name: postgres
     restart: unless-stopped
-    env_file:
-      - .env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DEFAULT_DB}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    networks:
-      - backend
     expose:
       - "5432"
+    networks:
+      - internal
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 10s
       timeout: 5s
-      retries: 5
-      start_period: 10s
+      retries: 10
+      start_period: 15s
+
+  db-init:
+    image: postgres:17.9-alpine
+    container_name: db-init
+    restart: "no"
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - internal
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        export PGPASSWORD="$$POSTGRES_PASSWORD"
+
+        for db in "$$KEYCLOAK_DB_NAME" "$$USER_DB_NAME" "$$PROPERTY_DB_NAME" "$$ORDER_DB_NAME" "$$PAYMENT_DB_NAME"; do
+          psql -h postgres -U "$$POSTGRES_USER" -d "$$POSTGRES_DEFAULT_DB" -tAc "SELECT 1 FROM pg_database WHERE datname = '$$db'" | grep -q 1 || \
+          psql -h postgres -U "$$POSTGRES_USER" -d "$$POSTGRES_DEFAULT_DB" -c "CREATE DATABASE \"$$db\""
+        done
+
+  db-migrate-user:
+    image: mcr.microsoft.com/dotnet/sdk:10.0
+    container_name: db-migrate-user
+    restart: "no"
+    env_file:
+      - .env
+    working_dir: /src/user_service
+    environment:
+      ConnectionStrings__Default: Host=postgres;Port=5432;Database=${USER_DB_NAME};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+    networks:
+      - internal
+    volumes:
+      - ../../services/user_service:/src/user_service
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        export PATH="$$PATH:/root/.dotnet/tools"
+        dotnet tool install --global dotnet-ef --version 10.0.8
+        dotnet ef database update --project UserService.csproj --startup-project UserService.csproj
+
+  db-migrate-property:
+    image: mcr.microsoft.com/dotnet/sdk:10.0
+    container_name: db-migrate-property
+    restart: "no"
+    env_file:
+      - .env
+    working_dir: /src/property_service
+    environment:
+      ConnectionStrings__Default: Host=postgres;Port=5432;Database=${PROPERTY_DB_NAME};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+    networks:
+      - internal
+    volumes:
+      - ../../services/property_service:/src/property_service
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        export PATH="$$PATH:/root/.dotnet/tools"
+        dotnet tool install --global dotnet-ef --version 10.0.8
+        dotnet ef database update --project PropertyService.csproj --startup-project PropertyService.csproj
+
+  db-migrate-order:
+    image: mcr.microsoft.com/dotnet/sdk:10.0
+    container_name: db-migrate-order
+    restart: "no"
+    env_file:
+      - .env
+    working_dir: /src/order_service
+    environment:
+      ConnectionStrings__Default: Host=postgres;Port=5432;Database=${ORDER_DB_NAME};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
+      GrpcClients__PropertyService__Address: http://property:7026
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+    networks:
+      - internal
+    volumes:
+      - ../../services/order_service:/src/order_service
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        export PATH="$$PATH:/root/.dotnet/tools"
+        dotnet tool install --global dotnet-ef --version 10.0.8
+        dotnet ef database update --project OrderService.csproj --startup-project OrderService.csproj
+
+  db-migrate-payment:
+    image: mcr.microsoft.com/dotnet/sdk:10.0
+    container_name: db-migrate-payment
+    restart: "no"
+    env_file:
+      - .env
+    working_dir: /src/payment_service
+    environment:
+      ConnectionStrings__Default: Host=postgres;Port=5432;Database=${PAYMENT_DB_NAME};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
+      PayOS__ClientId: ${PAYOS_CLIENT_ID}
+      PayOS__ApiKey: ${PAYOS_API_KEY}
+      PayOS__ChecksumKey: ${PAYOS_CHECKSUM_KEY}
+      PayOS__ReturnUrl: https://${PUBLIC_DOMAIN}/customer/payment-result?status=success
+      PayOS__CancelUrl: https://${PUBLIC_DOMAIN}/customer/payment-result?status=cancel
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+      db-migrate-order:
+        condition: service_completed_successfully
+    networks:
+      - internal
+    volumes:
+      - ../../services/payment_service:/src/payment_service
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        export PATH="$$PATH:/root/.dotnet/tools"
+        dotnet tool install --global dotnet-ef --version 10.0.8
+        dotnet ef database update --project PaymentService.csproj --startup-project PaymentService.csproj
 
   keycloak:
     image: quay.io/keycloak/keycloak:26.6.1
     container_name: keycloak
     restart: unless-stopped
-    command: ["start", --import-realm"]
+    command:
+      - start
+      - --http-enabled=true
+      - --http-port=1307
+      - --health-enabled=true
+      - --metrics-enabled=true
+      - --proxy-headers=xforwarded
+      - --http-relative-path=${KEYCLOAK_PATH_PREFIX}
+      - --hostname=https://${PUBLIC_DOMAIN}${KEYCLOAK_PATH_PREFIX}
+      - --hostname-strict=true
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: ${KC_BOOTSTRAP_ADMIN_USERNAME}
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_BOOTSTRAP_ADMIN_PASSWORD}
+      KC_DB: postgres
+      KC_DB_URL_HOST: postgres
+      KC_DB_URL_PORT: 5432
+      KC_DB_URL_DATABASE: ${KEYCLOAK_DB_NAME}
+      KC_DB_USERNAME: ${POSTGRES_USER}
+      KC_DB_PASSWORD: ${POSTGRES_PASSWORD}
     expose:
-      - "1307:8080"
-    env_file:
-      - .env
+      - "1307"
     networks:
-      - backend
+      - proxy
+      - internal
     depends_on:
-      postgres:
-        condition: service_healthy
+      db-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "wget --spider -q http://127.0.0.1:1307${KEYCLOAK_PATH_PREFIX}/health/ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 40s
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=proxy
+
+      - traefik.http.routers.keycloak.entrypoints=websecure
+      - traefik.http.routers.keycloak.rule=Host(`${PUBLIC_DOMAIN}`) && PathPrefix(`${KEYCLOAK_PATH_PREFIX}`)
+      - traefik.http.routers.keycloak.priority=90
+      - traefik.http.routers.keycloak.tls=true
+      - traefik.http.routers.keycloak.tls.certresolver=le
+      - traefik.http.routers.keycloak.middlewares=security-headers
+
+      - traefik.http.routers.keycloak-http.entrypoints=web
+      - traefik.http.routers.keycloak-http.rule=Host(`${PUBLIC_DOMAIN}`) && PathPrefix(`${KEYCLOAK_PATH_PREFIX}`)
+      - traefik.http.routers.keycloak-http.priority=90
+      - traefik.http.routers.keycloak-http.middlewares=redirect-to-https
+
+      - traefik.http.services.keycloak.loadbalancer.server.port=1307
+
+      - traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https
+      - traefik.http.middlewares.redirect-to-https.redirectscheme.permanent=true
+      - traefik.http.middlewares.security-headers.headers.stsSeconds=31536000
+      - traefik.http.middlewares.security-headers.headers.stsIncludeSubdomains=true
+      - traefik.http.middlewares.security-headers.headers.forceSTSHeader=true
+      - traefik.http.middlewares.security-headers.headers.contentTypeNosniff=true
+      - traefik.http.middlewares.security-headers.headers.frameDeny=true
+      - traefik.http.middlewares.security-headers.headers.referrerPolicy=strict-origin-when-cross-origin
 
   kafka:
     image: apache/kafka:4.1.1
     container_name: kafka
     restart: unless-stopped
-    ports:
-      - "9092:9092"
-    env_file:
-      - .env
+    expose:
+      - "9092"
     networks:
-      - backend
+      - internal
     volumes:
       - kafka_data:/var/lib/kafka
     healthcheck:
       test:
         [
           "CMD-SHELL",
-          "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1 || exit 1",
+          "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1 || exit 1"
         ]
       interval: 30s
       timeout: 10s
-      retries: 5
+      retries: 10
       start_period: 40s
 
   user:
     image: docker.io/tienhai2808/stay_saga-user
+    container_name: stay-saga-user
     init: true
     restart: unless-stopped
-    env_file:
-      - .env
-    networks:
-      - backend
+    environment:
+      ASPNETCORE_FORWARDEDHEADERS_ENABLED: "true"
+      ConnectionStrings__Default: Host=postgres;Port=5432;Database=${USER_DB_NAME};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
+      Keycloak__Realm: ${KEYCLOAK_REALM}
+      Keycloak__AdminUrl: http://keycloak:1307${KEYCLOAK_PATH_PREFIX}
+      Keycloak__AdminClientId: ${KEYCLOAK_ADMIN_CLIENT_ID}
+      Keycloak__AdminClientSecret: ${KEYCLOAK_ADMIN_CLIENT_SECRET}
+      Keycloak__ClientId: ${KEYCLOAK_API_CLIENT_ID}
+      Keycloak__ClientSecret: ${KEYCLOAK_API_CLIENT_SECRET}
+      Keycloak__Authority: https://${PUBLIC_DOMAIN}${KEYCLOAK_PATH_PREFIX}/realms/${KEYCLOAK_REALM}
+      Keycloak__Audience: ${KEYCLOAK_API_AUDIENCE}
     expose:
       - "5293"
+    networks:
+      - internal
     depends_on:
-      postgres:
+      db-migrate-user:
+        condition: service_completed_successfully
+      keycloak:
         condition: service_healthy
 
   property:
     image: docker.io/tienhai2808/stay_saga-property
+    container_name: stay-saga-property
     init: true
     restart: unless-stopped
-    env_file:
-      - .env
-    networks:
-      - backend
+    environment:
+      ConnectionStrings__Default: Host=postgres;Port=5432;Database=${PROPERTY_DB_NAME};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
+      Keycloak__Authority: https://${PUBLIC_DOMAIN}${KEYCLOAK_PATH_PREFIX}/realms/${KEYCLOAK_REALM}
+      Keycloak__Audience: ${KEYCLOAK_API_AUDIENCE}
     expose:
       - "5203"
       - "7026"
+    networks:
+      - internal
     depends_on:
-      postgres:
+      db-migrate-property:
+        condition: service_completed_successfully
+      keycloak:
         condition: service_healthy
 
   order:
     image: docker.io/tienhai2808/stay_saga-order
+    container_name: stay-saga-order
     init: true
     restart: unless-stopped
-    env_file:
-      - .env
-    networks:
-      - backend
+    environment:
+      ConnectionStrings__Default: Host=postgres;Port=5432;Database=${ORDER_DB_NAME};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
+      GrpcClients__PropertyService__Address: http://property:7026
+      Kafka__BootstrapServers: kafka:9092
+      Keycloak__Authority: https://${PUBLIC_DOMAIN}${KEYCLOAK_PATH_PREFIX}/realms/${KEYCLOAK_REALM}
+      Keycloak__Audience: ${KEYCLOAK_API_AUDIENCE}
     expose:
       - "5215"
+    networks:
+      - internal
     depends_on:
-      postgres:
-        condition: service_healthy
+      db-migrate-order:
+        condition: service_completed_successfully
       kafka:
         condition: service_healthy
+      keycloak:
+        condition: service_healthy
+      property:
+        condition: service_started
 
   payment:
     image: docker.io/tienhai2808/stay_saga-payment
+    container_name: stay-saga-payment
     init: true
     restart: unless-stopped
-    env_file:
-      - .env
-    networks:
-      - backend
+    environment:
+      ConnectionStrings__Default: Host=postgres;Port=5432;Database=${PAYMENT_DB_NAME};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
+      Kafka__BootstrapServers: kafka:9092
+      Keycloak__Authority: https://${PUBLIC_DOMAIN}${KEYCLOAK_PATH_PREFIX}/realms/${KEYCLOAK_REALM}
+      Keycloak__Audience: ${KEYCLOAK_API_AUDIENCE}
+      PayOS__ClientId: ${PAYOS_CLIENT_ID}
+      PayOS__ApiKey: ${PAYOS_API_KEY}
+      PayOS__ChecksumKey: ${PAYOS_CHECKSUM_KEY}
+      PayOS__ReturnUrl: https://${PUBLIC_DOMAIN}/customer/payment-result?status=success
+      PayOS__CancelUrl: https://${PUBLIC_DOMAIN}/customer/payment-result?status=cancel
     expose:
       - "5247"
+    networks:
+      - internal
     depends_on:
-      postgres:
-        condition: service_healthy
+      db-migrate-payment:
+        condition: service_completed_successfully
       kafka:
+        condition: service_healthy
+      keycloak:
         condition: service_healthy
 
   gateway:
     image: docker.io/tienhai2808/stay_saga-gateway
+    container_name: stay-saga-gateway
     init: true
     restart: unless-stopped
-    env_file:
-      - .env
-    networks:
-      - backend
+    environment:
+      ASPNETCORE_FORWARDEDHEADERS_ENABLED: "true"
+      Cors__AllowedOrigins__0: https://${PUBLIC_DOMAIN}
+      Keycloak__Authority: https://${PUBLIC_DOMAIN}${KEYCLOAK_PATH_PREFIX}/realms/${KEYCLOAK_REALM}
+      Keycloak__Audience: ${KEYCLOAK_API_AUDIENCE}
+      ReverseProxy__Clusters__user-service__Destinations__destination1__Address: http://user:5293
+      ReverseProxy__Clusters__property-service__Destinations__destination1__Address: http://property:5203
+      ReverseProxy__Clusters__order-service__Destinations__destination1__Address: http://order:5215
+      ReverseProxy__Clusters__payment-service__Destinations__destination1__Address: http://payment:5247
     expose:
       - "5122"
-    labels:
-      traefik.enable: "true"
-      traefik.docker.network: "backend"
-      traefik.http.routers.server.entrypoints: websecure
-      traefik.http.routers.server.priority: "10"
-      traefik.http.routers.server.middlewares: server-ratelimit,server-headers,server-compress,server-sizelimit,server-strip
-      traefik.http.routers.server.rule: Host(`staysaga.tienhai.site`) && PathPrefix(`${SV_API_PREFIX}`)
-      traefik.http.routers.server.tls: "true"
-      traefik.http.routers.server.tls.certresolver: le
-      traefik.http.routers.server.tls.domains.main: "staysaga.tienhai.site"
-
-      traefik.http.routers.server-http.entrypoints: web
-      traefik.http.routers.server-http.rule: Host(`staysaga.tienhai.site`) && PathPrefix(`${SV_API_PREFIX}`)
-      traefik.http.routers.server-http.middlewares: redirect-to-https
-      traefik.http.routers.server-http.priority: "10"
-
-      traefik.http.middlewares.server-strip.stripprefix.prefixes: ${SV_API_PREFIX}
-
-      traefik.http.middlewares.redirect-to-https.redirectscheme.scheme: https
-      traefik.http.middlewares.redirect-to-https.redirectscheme.permanent: "true"
-
-      traefik.http.middlewares.server-ratelimit.ratelimit.average: "100"
-      traefik.http.middlewares.server-ratelimit.ratelimit.burst: "50"
-      traefik.http.middlewares.server-ratelimit.ratelimit.period: "1m"
-      traefik.http.middlewares.server-ratelimit.ratelimit.sourcecriterion.ipstrategy.depth: "1"
-
-      traefik.http.middlewares.server-headers.headers.stsSeconds: "31536000"
-      traefik.http.middlewares.server-headers.headers.stsIncludeSubdomains: "true"
-      traefik.http.middlewares.server-headers.headers.forceSTSHeader: "true"
-      traefik.http.middlewares.server-headers.headers.contentTypeNosniff: "true"
-      traefik.http.middlewares.server-headers.headers.frameDeny: "true"
-      traefik.http.middlewares.server-headers.headers.browserXssFilter: "true"
-      traefik.http.middlewares.server-headers.headers.referrerPolicy: "strict-origin-when-cross-origin"
-
-      traefik.http.middlewares.server-compress.compress: "true"
-
-      traefik.http.middlewares.server-sizelimit.buffering.maxRequestBodyBytes: "10485760"
-      traefik.http.middlewares.server-sizelimit.buffering.memRequestBodyBytes: "2097152"
-
-      traefik.http.services.server.loadbalancer.server.port: "5122"
-      traefik.http.services.server.loadbalancer.healthcheck.path: "/ping"
-      traefik.http.services.server.loadbalancer.healthcheck.interval: "10s"
-      traefik.http.services.server.loadbalancer.healthcheck.timeout: "3s"
+    networks:
+      - internal
+      - proxy
+    depends_on:
+      user:
+        condition: service_started
+      property:
+        condition: service_started
+      order:
+        condition: service_started
+      payment:
+        condition: service_started
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:5122/ping"]
       interval: 10s
       timeout: 3s
       retries: 10
       start_period: 60s
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=proxy
+
+      - traefik.http.routers.gateway.entrypoints=websecure
+      - traefik.http.routers.gateway.rule=Host(`${PUBLIC_DOMAIN}`) && PathPrefix(`${SV_API_PREFIX}`)
+      - traefik.http.routers.gateway.priority=100
+      - traefik.http.routers.gateway.tls=true
+      - traefik.http.routers.gateway.tls.certresolver=le
+      - traefik.http.routers.gateway.middlewares=gateway-ratelimit,gateway-strip,gateway-security,gateway-compress,gateway-sizelimit
+
+      - traefik.http.routers.gateway-http.entrypoints=web
+      - traefik.http.routers.gateway-http.rule=Host(`${PUBLIC_DOMAIN}`) && PathPrefix(`${SV_API_PREFIX}`)
+      - traefik.http.routers.gateway-http.priority=100
+      - traefik.http.routers.gateway-http.middlewares=redirect-to-https
+
+      - traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https
+      - traefik.http.middlewares.redirect-to-https.redirectscheme.permanent=true
+
+      - traefik.http.middlewares.gateway-strip.stripprefix.prefixes=${SV_API_PREFIX}
+
+      - traefik.http.middlewares.gateway-ratelimit.ratelimit.average=100
+      - traefik.http.middlewares.gateway-ratelimit.ratelimit.burst=50
+      - traefik.http.middlewares.gateway-ratelimit.ratelimit.period=1m
+      - traefik.http.middlewares.gateway-ratelimit.ratelimit.sourcecriterion.ipstrategy.depth=1
+
+      - traefik.http.middlewares.gateway-security.headers.stsSeconds=31536000
+      - traefik.http.middlewares.gateway-security.headers.stsIncludeSubdomains=true
+      - traefik.http.middlewares.gateway-security.headers.forceSTSHeader=true
+      - traefik.http.middlewares.gateway-security.headers.contentTypeNosniff=true
+      - traefik.http.middlewares.gateway-security.headers.frameDeny=true
+      - traefik.http.middlewares.gateway-security.headers.referrerPolicy=strict-origin-when-cross-origin
+
+      - traefik.http.middlewares.gateway-compress.compress=true
+
+      - traefik.http.middlewares.gateway-sizelimit.buffering.maxRequestBodyBytes=10485760
+      - traefik.http.middlewares.gateway-sizelimit.buffering.memRequestBodyBytes=2097152
+
+      - traefik.http.services.gateway.loadbalancer.server.port=5122
+      - traefik.http.services.gateway.loadbalancer.healthcheck.path=/ping
+      - traefik.http.services.gateway.loadbalancer.healthcheck.interval=10s
+      - traefik.http.services.gateway.loadbalancer.healthcheck.timeout=3s
 
   client:
     image: docker.io/tienhai2808/stay_saga-client
+    container_name: stay-saga-client
     init: true
-    env_file:
-      - .env
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_URL: https://${PUBLIC_DOMAIN}${SV_API_PREFIX}
     expose:
       - "3000"
-    restart: unless-stopped
     networks:
-      - frontend
-      - backend
+      - proxy
+      - internal
     depends_on:
       gateway:
         condition: service_healthy
     labels:
-      traefik.enable: "true"
-      traefik.docker.network: "frontend"
+      - traefik.enable=true
+      - traefik.docker.network=proxy
 
-      traefik.http.routers.client.entrypoints: websecure
-      traefik.http.routers.client.rule: Host(`staysaga.tienhai.site`)
-      traefik.http.routers.client.tls.certresolver: le
-      traefik.http.routers.client.priority: "1"
-      traefik.http.routers.client.tls.domains.main: "staysaga.tienhai.site"
+      - traefik.http.routers.client.entrypoints=websecure
+      - traefik.http.routers.client.rule=Host(`${PUBLIC_DOMAIN}`)
+      - traefik.http.routers.client.priority=1
+      - traefik.http.routers.client.tls=true
+      - traefik.http.routers.client.tls.certresolver=le
 
-      traefik.http.routers.client-http.entrypoints: web
-      traefik.http.routers.client-http.rule: Host(`staysaga.tienhai.site`)
-      traefik.http.routers.client-http.middlewares: redirect-to-https
-      traefik.http.routers.client-http.priority: "1"
+      - traefik.http.routers.client-http.entrypoints=web
+      - traefik.http.routers.client-http.rule=Host(`${PUBLIC_DOMAIN}`)
+      - traefik.http.routers.client-http.priority=1
+      - traefik.http.routers.client-http.middlewares=redirect-to-https
 
-      traefik.http.services.client.loadbalancer.server.port: "3000"
-      traefik.http.services.client.loadbalancer.healthcheck.path: "/"
-      traefik.http.services.client.loadbalancer.healthcheck.interval: "10s"
-      traefik.http.services.client.loadbalancer.healthcheck.timeout: "3s"
+      - traefik.http.middlewares.redirect-to-https.redirectscheme.scheme=https
+      - traefik.http.middlewares.redirect-to-https.redirectscheme.permanent=true
+
+      - traefik.http.services.client.loadbalancer.server.port=3000
 
 networks:
-  frontend:
+  proxy:
     driver: bridge
-  backend:
+  internal:
     driver: bridge
 
 volumes:
+  letsencrypt:
+    driver: local
   postgres_data:
     driver: local
   kafka_data:
-    driver: local
-  letsencrypt:
     driver: local
