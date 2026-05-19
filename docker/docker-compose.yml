@@ -324,7 +324,9 @@ services:
     init: true
     restart: unless-stopped
     environment:
-      NEXT_PUBLIC_API_URL: https://${PUBLIC_DOMAIN}${SV_API_PREFIX}
+      NEXT_PUBLIC_API_URL: ${SV_API_PREFIX}
+      HOSTNAME: "0.0.0.0"
+      PORT: "3000"
     expose:
       - "3000"
     networks:
