@@ -278,12 +278,6 @@ services:
         condition: service_started
       payment:
         condition: service_started
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:5122/ping"]
-      interval: 10s
-      timeout: 3s
-      retries: 10
-      start_period: 60s
     labels:
       traefik.enable: "true"
       traefik.docker.network: "frontend"
@@ -338,7 +332,7 @@ services:
       - backend
     depends_on:
       gateway:
-        condition: service_healthy
+        condition: service_started
     labels:
       traefik.enable: "true"
       traefik.docker.network: "frontend"
