@@ -253,8 +253,8 @@ services:
       PayOS__ClientId: ${PAYOS_CLIENT_ID}
       PayOS__ApiKey: ${PAYOS_API_KEY}
       PayOS__ChecksumKey: ${PAYOS_CHECKSUM_KEY}
-      PayOS__ReturnUrl: https://${PUBLIC_DOMAIN}/customer/payment-result?status=success
-      PayOS__CancelUrl: https://${PUBLIC_DOMAIN}/customer/payment-result?status=cancel
+      PayOS__ReturnUrl: https://${PUBLIC_DOMAIN}/customer/payment-result
+      PayOS__CancelUrl: https://${PUBLIC_DOMAIN}/customer/payment-result
     expose:
       - "5247"
     networks:
