@@ -224,8 +224,8 @@ services:
     environment:
       ConnectionStrings__Default: Host=postgres;Port=5432;Database=${ORDER_DB_NAME};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
       GrpcClients__PropertyAddress: http://property:7026
-      GrpcClients__UserAddress: http://property:7211
-      GrpcClients__PaymentAddress: http://property:7018
+      GrpcClients__UserAddress: http://user:7211
+      GrpcClients__PaymentAddress: http://payment:7018
       Kafka__BootstrapServers: kafka:9092
       Keycloak__Authority: https://${KEYCLOAK_DOMAIN}/realms/${KEYCLOAK_REALM}
       Keycloak__Audience: ${KEYCLOAK_API_AUDIENCE}
