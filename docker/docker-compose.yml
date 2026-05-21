@@ -187,6 +187,7 @@ services:
       Keycloak__Audience: ${KEYCLOAK_API_AUDIENCE}
     expose:
       - "5293"
+      - "7211"
     networks:
       - backend
     depends_on:
@@ -222,7 +223,9 @@ services:
     restart: unless-stopped
     environment:
       ConnectionStrings__Default: Host=postgres;Port=5432;Database=${ORDER_DB_NAME};Username=${POSTGRES_USER};Password=${POSTGRES_PASSWORD}
-      GrpcClients__PropertyService__Address: http://property:7026
+      GrpcClients__PropertyAddress: http://property:7026
+      GrpcClients__UserAddress: http://property:7211
+      GrpcClients__PaymentAddress: http://property:7018
       Kafka__BootstrapServers: kafka:9092
       Keycloak__Authority: https://${KEYCLOAK_DOMAIN}/realms/${KEYCLOAK_REALM}
       Keycloak__Audience: ${KEYCLOAK_API_AUDIENCE}
@@ -238,6 +241,10 @@ services:
       keycloak:
         condition: service_healthy
       property:
+        condition: service_started
+      user:
+        condition: service_started
+      payment:
         condition: service_started
 
   payment:
@@ -257,6 +264,7 @@ services:
       PayOS__CancelUrl: https://${PUBLIC_DOMAIN}/customer/payment-result
     expose:
       - "5247"
+      - "7018"
     networks:
       - backend
     depends_on:

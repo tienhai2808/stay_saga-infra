@@ -6,13 +6,13 @@ Single-file deployment only: all routing is defined directly in `docker-compose.
 
 1. Copy env template:
    - `cp .env.example .env`
-2. Edit `.env` (domain, db password, keycloak secrets, payos keys, github token).
+2. Edit `.env` (domain, db password, keycloak secrets, payos keys).
 3. Start infra + Keycloak first:
    - `docker compose up -d traefik postgres keycloak`
    - if you changed compose labels/config, force recreate:
    - `docker compose up -d --force-recreate traefik keycloak`
 4. Open Keycloak at:
-   - `https://${PUBLIC_DOMAIN}${KEYCLOAK_PATH_PREFIX}`
+   - `https://${KEYCLOAK_DOMAIN}`
 5. Manually configure Keycloak realm/clients (details below).
 6. Start full stack:
    - `docker compose up -d`
@@ -42,41 +42,34 @@ Use the values from `.env`:
   - `admin`
   - (optional) add `user` to default roles so register user gets role automatically
 
-## Database migration via Docker Compose (`dotnet ef`)
+## Database migration behavior
 
-Migrations are run by one-shot jobs in compose using `dotnet ef database update`:
+Migrations are not run by dedicated `db-migrate-*` jobs in compose.
 
-- `db-init`: create missing databases
-- `db-migrate-user`
-- `db-migrate-property`
-- `db-migrate-order`
-- `db-migrate-payment`
+Current behavior:
 
-Important:
-
-- `db-migrate-*` services mount source code from `../../services/*`.
-- You must have source folders available on host (same repo layout).
-- `GITHUB_TOKEN` in `.env` must have permission to read GitHub NuGet packages (`read:packages`).
+- `db-init` creates missing databases (`keycloak`, `user`, `property`, `order`, `payment`).
+- Each .NET service runs `db.Database.Migrate()` automatically on startup in `Production`.
 
 ## Endpoints
 
 - Frontend: `https://${PUBLIC_DOMAIN}`
 - API Gateway: `https://${PUBLIC_DOMAIN}${SV_API_PREFIX}`
-- Keycloak: `https://${PUBLIC_DOMAIN}${KEYCLOAK_PATH_PREFIX}`
+- Keycloak: `https://${KEYCLOAK_DOMAIN}`
 
 ## Useful commands
 
 - Start all: `docker compose up -d`
 - Stop all: `docker compose down`
-- Re-run migrations only:
-  - `docker compose up --force-recreate db-migrate-user db-migrate-property db-migrate-order db-migrate-payment`
 - Re-run only db init:
   - `docker compose up --force-recreate db-init`
+- Restart app services (to trigger migrate-on-start in production):
+  - `docker compose restart user property order payment`
 - Quick check Keycloak route through Traefik:
-  - `curl -kI --resolve ${PUBLIC_DOMAIN}:443:127.0.0.1 https://${PUBLIC_DOMAIN}${KEYCLOAK_PATH_PREFIX}/admin/master/console/`
+  - `curl -kI --resolve ${KEYCLOAK_DOMAIN}:443:127.0.0.1 https://${KEYCLOAK_DOMAIN}/admin/master/console/`
 
 ## Notes
 
 - Keep `.env` out of git.
-- Ensure DNS `A/AAAA` for `PUBLIC_DOMAIN` points to this host.
+- Ensure DNS `A/AAAA` for `PUBLIC_DOMAIN` and `KEYCLOAK_DOMAIN` points to this host.
 - Open firewall inbound `80` and `443`.
